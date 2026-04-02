@@ -182,7 +182,7 @@ class DiffusionEvalConfig:
                 else:
                     pipeline_kwargs["control_image"] = controls
 
-            output = pipeline(prompts, generator=generators, **pipeline_kwargs)
+            output = pipeline(prompt=prompts, generator=generators, **pipeline_kwargs)
             images = output.images
             for filename, image in zip(filenames, images, strict=True):
                 image.save(os.path.join(dirpath, f"{filename}.png"))

@@ -57,15 +57,15 @@ class DiffusionAttentionProcessor(nn.Module):
         **kwargs,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         assert len(args) == 0 and kwargs.get("scale", None) is None
-        assert attn.spatial_norm is None
-        assert attn.group_norm is None
-        assert attn.norm_cross is None
-        assert not attn.residual_connection
-        assert attn.rescale_output_factor == 1.0
+        assert getattr(attn, "spatial_norm", None) is None
+        assert getattr(attn, "group_norm", None) is None
+        assert getattr(attn, "norm_cross", None) is None
+        assert not getattr(attn, "residual_connection", False)
+        assert getattr(attn, "rescale_output_factor", 1.0) == 1.0
         heads = attn.heads
         head_dim = attn.inner_dim // heads
-        kv_heads = attn.inner_kv_dim // head_dim
-        assert attn.scale == head_dim**-0.5
+        kv_heads = getattr(attn, "inner_kv_dim", attn.inner_dim) // head_dim
+        assert getattr(attn, "scale", head_dim**-0.5) == head_dim**-0.5
 
         input_ndim, input_shape = hidden_states.dim(), hidden_states.size()
         if input_ndim > 3:

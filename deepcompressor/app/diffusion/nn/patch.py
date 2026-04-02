@@ -1,8 +1,13 @@
 import torch.nn as nn
 from diffusers.models.attention_processor import Attention
 from diffusers.models.transformers.transformer_flux import FluxSingleTransformerBlock
+from diffusers.models.transformers.transformer_flux2 import (
+    Flux2Attention,
+    Flux2SingleTransformerBlock,
+)
 
 from deepcompressor.nn.patch.conv import ConcatConv2d, ShiftedConv2d
+from deepcompressor.nn.patch.flux2_attn import PatchedFlux2ParallelSelfAttention
 from deepcompressor.nn.patch.linear import ConcatLinear, ShiftedLinear
 from deepcompressor.utils import patch, tools
 
@@ -12,6 +17,7 @@ from .struct import DiffusionFeedForwardStruct, DiffusionModelStruct, DiffusionR
 __all__ = [
     "replace_up_block_conv_with_concat_conv",
     "replace_fused_linear_with_concat_linear",
+    "replace_flux2_parallel_attn",
     "replace_attn_processor",
     "shift_input_activations",
 ]
@@ -55,7 +61,7 @@ def replace_up_block_conv_with_concat_conv(model: nn.Module) -> None:
 
 
 def replace_fused_linear_with_concat_linear(model: nn.Module) -> None:
-    """Replace fused Linear in FluxSingleTransformerBlock with ConcatLinear."""
+    """Replace fused Linear in FluxSingleTransformerBlock / Flux2SingleTransformerBlock with ConcatLinear."""
     logger = tools.logging.getLogger(__name__)
     logger.info("Replacing fused Linear with ConcatLinear.")
     tools.logging.Formatter.indent_inc()
@@ -67,6 +73,34 @@ def replace_fused_linear_with_concat_linear(model: nn.Module) -> None:
             logger.info(f"- out_features = {module.proj_out.out_features}")
             tools.logging.Formatter.indent_dec()
             module.proj_out = ConcatLinear.from_linear(module.proj_out, [module.proj_out.out_features])
+        elif isinstance(module, Flux2SingleTransformerBlock):
+            attn = module.attn
+            inner_dim = attn.inner_dim
+            mlp_hidden_dim = attn.mlp_hidden_dim
+            # Split to_out along input features into [attn_out, mlp_out]
+            # to_out takes concatenated [attn_output | mlp_output] as input
+            logger.info(f"+ Replacing fused to_out in {name}.attn with ConcatLinear.")
+            tools.logging.Formatter.indent_inc()
+            logger.info(f"- in_features = [{inner_dim}, {mlp_hidden_dim}]")
+            logger.info(f"- out_features = {attn.to_out.out_features}")
+            tools.logging.Formatter.indent_dec()
+            attn.to_out = ConcatLinear.from_linear(attn.to_out, [inner_dim])
+    tools.logging.Formatter.indent_dec()
+
+
+def replace_flux2_parallel_attn(model: nn.Module) -> None:
+    """Replace Flux2ParallelSelfAttention with PatchedFlux2ParallelSelfAttention.
+
+    Splits the fused to_qkv_mlp_proj into separate to_q, to_k, to_v, mlp_proj linears.
+    Must be called after replace_fused_linear_with_concat_linear (which splits to_out).
+    """
+    logger = tools.logging.getLogger(__name__)
+    logger.info("Replacing Flux2ParallelSelfAttention with patched version.")
+    tools.logging.Formatter.indent_inc()
+    for name, module in model.named_modules():
+        if isinstance(module, Flux2SingleTransformerBlock):
+            logger.info(f"+ Patching {name}.attn")
+            module.attn = PatchedFlux2ParallelSelfAttention(module.attn)
     tools.logging.Formatter.indent_dec()
 
 
@@ -113,6 +147,9 @@ def replace_attn_processor(model: nn.Module) -> None:
     tools.logging.Formatter.indent_inc()
     for name, module in model.named_modules():
         if isinstance(module, Attention):
+            logger.info(f"+ Replacing {name} processor with DiffusionAttentionProcessor.")
+            module.set_processor(DiffusionAttentionProcessor(module.processor))
+        elif isinstance(module, Flux2Attention):
             logger.info(f"+ Replacing {name} processor with DiffusionAttentionProcessor.")
             module.set_processor(DiffusionAttentionProcessor(module.processor))
     tools.logging.Formatter.indent_dec()

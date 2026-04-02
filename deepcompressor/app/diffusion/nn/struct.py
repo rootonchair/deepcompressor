@@ -35,6 +35,13 @@ from diffusers.models.transformers.transformer_flux import (
     FluxTransformer2DModel,
     FluxTransformerBlock,
 )
+from diffusers.models.transformers.transformer_flux2 import (
+    Flux2Attention,
+    Flux2FeedForward,
+    Flux2SingleTransformerBlock,
+    Flux2Transformer2DModel,
+    Flux2TransformerBlock,
+)
 from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel
 from diffusers.models.unets.unet_2d import UNet2DModel
 from diffusers.models.unets.unet_2d_blocks import (
@@ -57,8 +64,10 @@ from diffusers.pipelines import (
     StableDiffusionPipeline,
     StableDiffusionXLPipeline,
 )
+from diffusers.pipelines.flux2 import Flux2KleinPipeline
 
 from deepcompressor.nn.patch.conv import ConcatConv2d, ShiftedConv2d
+from deepcompressor.nn.patch.flux2_attn import PatchedFlux2ParallelSelfAttention
 from deepcompressor.nn.patch.linear import ConcatLinear, ShiftedLinear
 from deepcompressor.nn.struct.attn import (
     AttentionConfigStruct,
@@ -84,6 +93,8 @@ DIT_BLOCK_CLS = tp.Union[
     JointTransformerBlock,
     FluxSingleTransformerBlock,
     FluxTransformerBlock,
+    Flux2SingleTransformerBlock,
+    Flux2TransformerBlock,
     SanaTransformerBlock,
 ]
 UNET_BLOCK_CLS = tp.Union[
@@ -99,6 +110,7 @@ DIT_CLS = tp.Union[
     PixArtTransformer2DModel,
     SD3Transformer2DModel,
     FluxTransformer2DModel,
+    Flux2Transformer2DModel,
     SanaTransformer2DModel,
 ]
 UNET_CLS = tp.Union[UNet2DModel, UNet2DConditionModel]
@@ -111,6 +123,7 @@ DIT_PIPELINE_CLS = tp.Union[
     FluxPipeline,
     FluxControlPipeline,
     FluxFillPipeline,
+    Flux2KleinPipeline,
     SanaPipeline,
 ]
 PIPELINE_CLS = tp.Union[UNET_PIPELINE_CLS, DIT_PIPELINE_CLS]
@@ -334,7 +347,7 @@ class DiffusionAttentionStruct(AttentionStruct):
 
     @staticmethod
     def _default_construct(
-        module: Attention,
+        module: tp.Union[Attention, Flux2Attention, PatchedFlux2ParallelSelfAttention],
         /,
         parent: tp.Optional["DiffusionTransformerBlockStruct"] = None,
         fname: str = "",
@@ -343,7 +356,7 @@ class DiffusionAttentionStruct(AttentionStruct):
         idx: int = 0,
         **kwargs,
     ) -> "DiffusionAttentionStruct":
-        if module.is_cross_attention:
+        if getattr(module, "is_cross_attention", False):
             q_proj, k_proj, v_proj = module.to_q, None, None
             add_q_proj, add_k_proj, add_v_proj, add_o_proj = None, module.to_k, module.to_v, None
             q_proj_rname, k_proj_rname, v_proj_rname = "to_q", "", ""
@@ -357,21 +370,27 @@ class DiffusionAttentionStruct(AttentionStruct):
             q_proj_rname, k_proj_rname, v_proj_rname = "to_q", "to_k", "to_v"
             add_q_proj_rname, add_k_proj_rname, add_v_proj_rname = "add_q_proj", "add_k_proj", "add_v_proj"
             add_o_proj_rname = "to_add_out"
-        if getattr(module, "to_out", None) is not None:
+        if isinstance(module, PatchedFlux2ParallelSelfAttention):
+            # to_out is ConcatLinear; linears[0] is attn output
+            assert isinstance(module.to_out, ConcatLinear) and len(module.to_out.linears) == 2
+            o_proj = module.to_out.linears[0]
+            o_proj_rname = "to_out.linears.0"
+        elif getattr(module, "to_out", None) is not None:
             o_proj = module.to_out[0]
             o_proj_rname = "to_out.0"
             assert isinstance(o_proj, nn.Linear)
-        elif parent is not None:
-            assert isinstance(parent.module, FluxSingleTransformerBlock)
+        elif parent is not None and isinstance(parent.module, FluxSingleTransformerBlock):
             assert isinstance(parent.module.proj_out, ConcatLinear)
             assert len(parent.module.proj_out.linears) == 2
             o_proj = parent.module.proj_out.linears[0]
             o_proj_rname = ".proj_out.linears.0"
         else:
             raise RuntimeError("Cannot find the output projection.")
-        if isinstance(module.processor, DiffusionAttentionProcessor):
+        if isinstance(module, PatchedFlux2ParallelSelfAttention):
+            with_rope = True
+        elif isinstance(getattr(module, "processor", None), DiffusionAttentionProcessor):
             with_rope = module.processor.rope is not None
-        elif module.processor.__class__.__name__.startswith("Flux"):
+        elif hasattr(module, "processor") and module.processor.__class__.__name__.startswith("Flux"):
             with_rope = True
         else:
             with_rope = False  # TODO: fix for other processors
@@ -383,7 +402,9 @@ class DiffusionAttentionStruct(AttentionStruct):
             num_key_value_heads=module.to_k.weight.shape[0] // (module.to_q.weight.shape[0] // module.heads),
             with_qk_norm=module.norm_q is not None,
             with_rope=with_rope,
-            linear_attn=isinstance(module.processor, SanaLinearAttnProcessor2_0),
+            linear_attn=False if isinstance(module, PatchedFlux2ParallelSelfAttention) else isinstance(
+                getattr(module, "processor", None), SanaLinearAttnProcessor2_0
+            ),
         )
         return DiffusionAttentionStruct(
             module=module,
@@ -468,7 +489,9 @@ class DiffusionFeedForwardStruct(FeedForwardStruct):
 
     @staticmethod
     def _default_construct(
-        module: FeedForward | FluxSingleTransformerBlock | GLUMBConv,
+        module: tp.Union[
+            FeedForward, FluxSingleTransformerBlock, Flux2SingleTransformerBlock, Flux2FeedForward, GLUMBConv
+        ],
         /,
         parent: tp.Optional["DiffusionTransformerBlockStruct"] = None,
         fname: str = "",
@@ -508,6 +531,28 @@ class DiffusionFeedForwardStruct(FeedForwardStruct):
                 down_proj, down_proj_rname = layer_2, "proj_out.linears.1"
             ffn = nn.Sequential(up_proj, module.act_mlp, layer_2)
             assert not rname, f"Unsupported rname: {rname}"
+        elif isinstance(module, Flux2SingleTransformerBlock):
+            # After patching, module.attn is PatchedFlux2ParallelSelfAttention
+            up_proj, up_proj_rname = module.attn.mlp_proj, "attn.mlp_proj"
+            act_type = "swish_glu"
+            assert isinstance(module.attn.to_out, ConcatLinear)
+            assert len(module.attn.to_out.linears) == 2
+            layer_2 = module.attn.to_out.linears[1]
+            if isinstance(layer_2, ShiftedLinear):
+                down_proj, down_proj_rname = layer_2.linear, "attn.to_out.linears.1.linear"
+                act_type = "swish_glu_shifted"
+            else:
+                down_proj, down_proj_rname = layer_2, "attn.to_out.linears.1"
+            ffn = nn.Sequential(up_proj, module.attn.mlp_act_fn, layer_2)
+            assert not rname, f"Unsupported rname: {rname}"
+        elif isinstance(module, Flux2FeedForward):
+            up_proj, up_proj_rname = module.linear_in, "linear_in"
+            down_proj, down_proj_rname = module.linear_out, "linear_out"
+            act_type = "swish_glu"
+            if isinstance(down_proj, ShiftedLinear):
+                down_proj, down_proj_rname = down_proj.linear, "linear_out.linear"
+                act_type = "swish_glu_shifted"
+            ffn = module
         elif isinstance(module, GLUMBConv):
             ffn = module
             up_proj, up_proj_rname = module.conv_inverted, "conv_inverted"
@@ -698,6 +743,27 @@ class DiffusionTransformerBlockStruct(TransformerBlockStruct, DiffusionBlockStru
         elif isinstance(module, FluxTransformerBlock):
             parallel = False
             norm_type = add_norm_type = "ada_norm_zero"
+            pre_attn_norms, pre_attn_norm_rnames = [module.norm1], ["norm1"]
+            attns, attn_rnames = [module.attn], ["attn"]
+            pre_attn_add_norms, pre_attn_add_norm_rnames = [module.norm1_context], ["norm1_context"]
+            pre_ffn_norm, pre_ffn_norm_rname = module.norm2, "norm2"
+            ffn, ffn_rname = module.ff, "ff"
+            pre_add_ffn_norm, pre_add_ffn_norm_rname = module.norm2_context, "norm2_context"
+            add_ffn, add_ffn_rname = module.ff_context, "ff_context"
+        elif isinstance(module, Flux2SingleTransformerBlock):
+            # After patching, module.attn is PatchedFlux2ParallelSelfAttention
+            # with separate to_q/to_k/to_v/mlp_proj and ConcatLinear to_out.
+            parallel = True
+            norm_type = add_norm_type = "layer_norm"
+            pre_attn_norms, pre_attn_norm_rnames = [module.norm], ["norm"]
+            attns, attn_rnames = [module.attn], ["attn"]
+            pre_attn_add_norms, pre_attn_add_norm_rnames = [], []
+            pre_ffn_norm, pre_ffn_norm_rname = module.norm, "norm"
+            ffn, ffn_rname = module, ""
+            pre_add_ffn_norm, pre_add_ffn_norm_rname, add_ffn, add_ffn_rname = None, "", None, ""
+        elif isinstance(module, Flux2TransformerBlock):
+            parallel = False
+            norm_type = add_norm_type = "layer_norm"
             pre_attn_norms, pre_attn_norm_rnames = [module.norm1], ["norm1"]
             attns, attn_rnames = [module.attn], ["attn"]
             pre_attn_add_norms, pre_attn_add_norm_rnames = [module.norm1_context], ["norm1_context"]
@@ -1696,6 +1762,10 @@ class DiTStruct(DiffusionModelStruct, DiffusionTransformerStruct):
             module = module.transformer
         if isinstance(module, FluxTransformer2DModel):
             return FluxStruct.construct(module, parent=parent, fname=fname, rname=rname, rkey=rkey, idx=idx, **kwargs)
+        elif isinstance(module, Flux2Transformer2DModel):
+            return Flux2KleinStruct.construct(
+                module, parent=parent, fname=fname, rname=rname, rkey=rkey, idx=idx, **kwargs
+            )
         else:
             if isinstance(module, PixArtTransformer2DModel):
                 input_embed, input_embed_rname = module.pos_embed, "pos_embed"
@@ -1946,10 +2016,73 @@ class FluxStruct(DiTStruct):
         return {k: v for k, v in key_map.items() if v}
 
 
-DiffusionAttentionStruct.register_factory(Attention, DiffusionAttentionStruct._default_construct)
+@dataclass(kw_only=True)
+class Flux2KleinStruct(FluxStruct):
+    module: Flux2Transformer2DModel = field(repr=False, kw_only=False)
+    """the module of Flux2Transformer2DModel"""
+    # region child modules
+    input_embed: nn.Linear
+    time_embed: nn.Module  # Flux2TimestepGuidanceEmbeddings
+    text_embed: nn.Linear
+    # endregion
+
+    @staticmethod
+    def _default_construct(
+        module: tp.Union[Flux2KleinPipeline, Flux2Transformer2DModel],
+        /,
+        parent: tp.Optional[BaseModuleStruct] = None,
+        fname: str = "",
+        rname: str = "",
+        rkey: str = "",
+        idx: int = 0,
+        **kwargs,
+    ) -> "Flux2KleinStruct":
+        if isinstance(module, Flux2KleinPipeline):
+            module = module.transformer
+        if isinstance(module, Flux2Transformer2DModel):
+            input_embed = module.x_embedder
+            time_embed = module.time_guidance_embed
+            text_embed = module.context_embedder
+            input_embed_rname = "x_embedder"
+            time_embed_rname = "time_guidance_embed"
+            text_embed_rname = "context_embedder"
+            norm_out, norm_out_rname = module.norm_out, "norm_out"
+            proj_out, proj_out_rname = module.proj_out, "proj_out"
+            transformer_blocks, transformer_blocks_rname = module.transformer_blocks, "transformer_blocks"
+            single_transformer_blocks = module.single_transformer_blocks
+            single_transformer_blocks_rname = "single_transformer_blocks"
+            return Flux2KleinStruct(
+                module=module,
+                parent=parent,
+                fname=fname,
+                idx=idx,
+                rname=rname,
+                rkey=rkey,
+                input_embed=input_embed,
+                time_embed=time_embed,
+                text_embed=text_embed,
+                transformer_blocks=transformer_blocks,
+                single_transformer_blocks=single_transformer_blocks,
+                norm_out=norm_out,
+                proj_out=proj_out,
+                input_embed_rname=input_embed_rname,
+                time_embed_rname=time_embed_rname,
+                text_embed_rname=text_embed_rname,
+                norm_out_rname=norm_out_rname,
+                proj_out_rname=proj_out_rname,
+                transformer_blocks_rname=transformer_blocks_rname,
+                single_transformer_blocks_rname=single_transformer_blocks_rname,
+            )
+        raise NotImplementedError(f"Unsupported module type: {type(module)}")
+
+
+DiffusionAttentionStruct.register_factory(
+    (Attention, Flux2Attention, PatchedFlux2ParallelSelfAttention), DiffusionAttentionStruct._default_construct
+)
 
 DiffusionFeedForwardStruct.register_factory(
-    (FeedForward, FluxSingleTransformerBlock, GLUMBConv), DiffusionFeedForwardStruct._default_construct
+    (FeedForward, FluxSingleTransformerBlock, Flux2SingleTransformerBlock, Flux2FeedForward, GLUMBConv),
+    DiffusionFeedForwardStruct._default_construct,
 )
 
 DiffusionTransformerBlockStruct.register_factory(DIT_BLOCK_CLS, DiffusionTransformerBlockStruct._default_construct)
@@ -1960,6 +2093,10 @@ UNetStruct.register_factory(tp.Union[UNET_PIPELINE_CLS, UNET_CLS], UNetStruct._d
 
 FluxStruct.register_factory(
     tp.Union[FluxPipeline, FluxControlPipeline, FluxTransformer2DModel], FluxStruct._default_construct
+)
+
+Flux2KleinStruct.register_factory(
+    tp.Union[Flux2KleinPipeline, Flux2Transformer2DModel], Flux2KleinStruct._default_construct
 )
 
 DiTStruct.register_factory(tp.Union[DIT_PIPELINE_CLS, DIT_CLS], DiTStruct._default_construct)
