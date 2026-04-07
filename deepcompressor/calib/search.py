@@ -725,10 +725,10 @@ class SearchBasedCalibrator(ABC, tp.Generic[_CONFIG, _CANDIDATE]):
                 w = _reshape_w(w, view_shape=w_view_shapes[j])
                 for s, ipt in enumerate(orig_ipts):
                     for i, x in enumerate(ipt.data):
-                        x = x.to(device=w.device, non_blocking=True)
+                        x = x.to(device=w.device, non_blocking=False)
                         y = torch.matmul(x, w)
                         y = y.view(*y.shape[:-2], y.shape[-2] * y.shape[-1])
-                        orig_opts[(i, s, j)] = y.to(device=self.opts_device or y.device, non_blocking=True)
+                        orig_opts[(i, s, j)] = y.to(device=self.opts_device or y.device, non_blocking=False)
             if self.needs_to_pre_reshape_x_for_wgts:
                 if same_ipts:
                     ipts = orig_ipts
@@ -758,7 +758,7 @@ class SearchBasedCalibrator(ABC, tp.Generic[_CONFIG, _CANDIDATE]):
                 y = eval_module(*ipt.args, **ipt.kwargs)
                 y = y[0] if not isinstance(y, torch.Tensor) else y
                 assert isinstance(y, torch.Tensor), "eval_mod should return a tensor"
-                orig_opts[(i,)] = y.to(device=self.opts_device or y.device, non_blocking=True)
+                orig_opts[(i,)] = y.to(device=self.opts_device or y.device, non_blocking=False)
                 del ipt, y
             for p, s in _state_dict:
                 p.data = s
@@ -794,13 +794,13 @@ class SearchBasedCalibrator(ABC, tp.Generic[_CONFIG, _CANDIDATE]):
                     w = _reshape_w(self._process_w_in_xw(w), view_shape=w_view_shapes[j])
                     for s, ipt in enumerate(ipts):
                         for i, x in enumerate(ipt.data):
-                            x = x.to(device=w.device, non_blocking=True)
+                            x = x.to(device=w.device, non_blocking=False)
                             if not self.needs_to_pre_reshape_x_for_wgts:
                                 x = self._process_x_in_xw(x, channels_dim=ipt.channels_dim)
                                 x = _reshape_x(x, view_shape=w_view_shapes[j], fn=ipt.reshape)
                             y = torch.matmul(x, w)
                             y = y.view(*y.shape[:-2], y.shape[-2] * y.shape[-1])
-                            y = y.sub_(orig_opts[(i, s, j)].to(device=w.device, non_blocking=True))
+                            y = y.sub_(orig_opts[(i, s, j)].to(device=w.device, non_blocking=False))
                             if self.granularity == SearchBasedCalibGranularity.Group:
                                 y = y.to(self.develop_dtype).pow_(self.config.degree).sum(dim=-1)
                             elif self.granularity == SearchBasedCalibGranularity.ChannelGroup:
@@ -822,7 +822,7 @@ class SearchBasedCalibrator(ABC, tp.Generic[_CONFIG, _CANDIDATE]):
                     y = eval_module(*ipt.args, **ipt.kwargs)
                     y = y[0] if not isinstance(y, torch.Tensor) else y
                     assert isinstance(y, torch.Tensor), "eval_mod should return a tensor"
-                    y = (y - orig_opts[(i,)].to(device=y.device, non_blocking=True)).to(self.develop_dtype)
+                    y = (y - orig_opts[(i,)].to(device=y.device, non_blocking=False)).to(self.develop_dtype)
                     y = y.pow_(self.config.degree).sum().view(-1)
                     if e[0] is None:
                         e[0] = y

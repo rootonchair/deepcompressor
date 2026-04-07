@@ -1008,6 +1008,8 @@ def smooth_linear_modules(
         for module in prevs:
             if module is None:
                 continue
+            if not hasattr(module, "weight") or module.weight is None:
+                continue
             downscale = downscale.to(device=module.weight.device)
             smooth_downscale_param(module.weight, downscale, channels_dim=0)
             if hasattr(module, "bias") and module.bias is not None:

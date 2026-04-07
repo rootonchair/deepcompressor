@@ -15,6 +15,11 @@ from diffusers.models.transformers.transformer_flux import (
     FluxSingleTransformerBlock,
     FluxTransformerBlock,
 )
+from diffusers.models.transformers.transformer_flux2 import (
+    Flux2Attention,
+    Flux2SingleTransformerBlock,
+    Flux2TransformerBlock,
+)
 from omniconfig import configclass
 
 from deepcompressor.data.cache import (
@@ -105,7 +110,7 @@ class DiffusionConcatCacheAction(ConcatCacheAction):
             cache (`TensorsCache`):
                 Cache.
         """
-        if isinstance(module, Attention):
+        if isinstance(module, (Attention, Flux2Attention)):
             encoder_hidden_states = tensors.get("encoder_hidden_states", None)
             if encoder_hidden_states is None:
                 tensors.pop("encoder_hidden_states", None)
@@ -172,7 +177,17 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
                 ),
                 outputs=TensorCache(channels_dim=-1, reshape=LinearReshapeFn()),
             )
-        elif isinstance(module, Attention):
+        elif isinstance(module, Flux2SingleTransformerBlock):
+            return IOTensorsCache(
+                inputs=TensorsCache(
+                    OrderedDict(
+                        hidden_states=TensorCache(channels_dim=-1, reshape=LinearReshapeFn()),
+                        temb_mod=TensorCache(channels_dim=1, reshape=LinearReshapeFn()),
+                    )
+                ),
+                outputs=TensorCache(channels_dim=-1, reshape=LinearReshapeFn()),
+            )
+        elif isinstance(module, (Attention, Flux2Attention)):
             return IOTensorsCache(
                 inputs=TensorsCache(
                     OrderedDict(
@@ -219,7 +234,7 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
             assert len(args) == 0, f"Invalid args: {args}"
         else:
             hidden_states = args[0]
-        if isinstance(m, (FluxTransformerBlock, JointTransformerBlock)):
+        if isinstance(m, (FluxTransformerBlock, Flux2TransformerBlock, JointTransformerBlock)):
             if "encoder_hidden_states" in kwargs:
                 encoder_hidden_states = kwargs.pop("encoder_hidden_states")
             else:
@@ -249,7 +264,7 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
             `dict[str | int, Any]`:
                 Dictionary for updating the next layer inputs.
         """
-        if isinstance(m, (FluxTransformerBlock, JointTransformerBlock)):
+        if isinstance(m, (FluxTransformerBlock, Flux2TransformerBlock, JointTransformerBlock)):
             assert isinstance(outputs, tuple) and len(outputs) == 2
             encoder_hidden_states, hidden_states = outputs
             return {0: hidden_states.detach().cpu(), 1: encoder_hidden_states.detach().cpu()}
@@ -333,8 +348,12 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
         ):
             layer_kwargs = {k: v for k, v in layer_inputs[0].kwargs.items()}  # noqa: C416
             layer_kwargs.pop("hidden_states", None)
-            layer_kwargs.pop("encoder_hidden_states", None)
+            if isinstance(layer, (FluxTransformerBlock, Flux2TransformerBlock, JointTransformerBlock)):
+                layer_kwargs.pop("encoder_hidden_states", None)
+            elif "encoder_hidden_states" in layer_kwargs:
+                assert layer_kwargs["encoder_hidden_states"] is None
             layer_kwargs.pop("temb", None)
+            layer_kwargs.pop("temb_mod", None)
             layer_struct = layer_structs[layer_idx]
             if isinstance(layer_struct, DiffusionBlockStruct):
                 assert layer_struct.name == layer_name

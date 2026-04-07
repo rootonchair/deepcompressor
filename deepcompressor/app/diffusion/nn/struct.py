@@ -343,6 +343,8 @@ class DiffusionAttentionStruct(AttentionStruct):
                 attn_kwargs["attention_mask"] = kwargs.get("encoder_attention_mask", None)
         else:
             attn_kwargs = {}
+            if "image_rotary_emb" in kwargs:
+                attn_kwargs["image_rotary_emb"] = kwargs["image_rotary_emb"]
         return attn_kwargs
 
     @staticmethod
