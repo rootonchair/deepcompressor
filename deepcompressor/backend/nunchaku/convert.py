@@ -218,6 +218,55 @@ def convert_to_nunchaku_transformer_block_state_dict(
     return converted
 
 
+def convert_to_nunchaku_flux2_single_transformer_block_state_dict(
+    state_dict: dict[str, torch.Tensor],
+    scale_dict: dict[str, torch.Tensor],
+    smooth_dict: dict[str, torch.Tensor],
+    branch_dict: dict[str, torch.Tensor],
+    block_name: str,
+    float_point: bool = False,
+) -> dict[str, torch.Tensor]:
+    down_proj_local_name = "attn.to_out.linears.1.linear"
+    if f"{block_name}.{down_proj_local_name}.weight" not in state_dict:
+        down_proj_local_name = "attn.to_out.linears.1"
+        assert f"{block_name}.{down_proj_local_name}.weight" in state_dict
+
+    return convert_to_nunchaku_transformer_block_state_dict(
+        state_dict=state_dict,
+        scale_dict=scale_dict,
+        smooth_dict=smooth_dict,
+        branch_dict=branch_dict,
+        block_name=block_name,
+        local_name_map={
+            "qkv_proj": ["attn.to_q", "attn.to_k", "attn.to_v"],
+            "norm_q": "attn.norm_q",
+            "norm_k": "attn.norm_k",
+            "out_proj": "attn.to_out.linears.0",
+            "mlp_fc1": "attn.mlp_proj",
+            "mlp_fc2": down_proj_local_name,
+        },
+        smooth_name_map={
+            "qkv_proj": "attn.to_q",
+            "out_proj": "attn.to_out.linears.0",
+            "mlp_fc1": "attn.to_q",
+            "mlp_fc2": down_proj_local_name,
+        },
+        branch_name_map={
+            "qkv_proj": "attn.to_q",
+            "out_proj": "attn.to_out.linears.0",
+            "mlp_fc1": "attn.mlp_proj",
+            "mlp_fc2": down_proj_local_name,
+        },
+        convert_map={
+            "qkv_proj": "linear",
+            "out_proj": "linear",
+            "mlp_fc1": "linear",
+            "mlp_fc2": "linear",
+        },
+        float_point=float_point,
+    )
+
+
 def convert_to_nunchaku_flux_single_transformer_block_state_dict(
     state_dict: dict[str, torch.Tensor],
     scale_dict: dict[str, torch.Tensor],
@@ -264,6 +313,77 @@ def convert_to_nunchaku_flux_single_transformer_block_state_dict(
             "out_proj": "linear",
             "mlp_fc1": "linear",
             "mlp_fc2": "linear",
+        },
+        float_point=float_point,
+    )
+
+
+def convert_to_nunchaku_flux2_transformer_block_state_dict(
+    state_dict: dict[str, torch.Tensor],
+    scale_dict: dict[str, torch.Tensor],
+    smooth_dict: dict[str, torch.Tensor],
+    branch_dict: dict[str, torch.Tensor],
+    block_name: str,
+    float_point: bool = False,
+) -> dict[str, torch.Tensor]:
+    down_proj_local_name = "ff.linear_out.linear"
+    if f"{block_name}.{down_proj_local_name}.weight" not in state_dict:
+        down_proj_local_name = "ff.linear_out"
+        assert f"{block_name}.{down_proj_local_name}.weight" in state_dict
+    context_down_proj_local_name = "ff_context.linear_out.linear"
+    if f"{block_name}.{context_down_proj_local_name}.weight" not in state_dict:
+        context_down_proj_local_name = "ff_context.linear_out"
+        assert f"{block_name}.{context_down_proj_local_name}.weight" in state_dict
+
+    return convert_to_nunchaku_transformer_block_state_dict(
+        state_dict=state_dict,
+        scale_dict=scale_dict,
+        smooth_dict=smooth_dict,
+        branch_dict=branch_dict,
+        block_name=block_name,
+        local_name_map={
+            "qkv_proj": ["attn.to_q", "attn.to_k", "attn.to_v"],
+            "qkv_proj_context": ["attn.add_q_proj", "attn.add_k_proj", "attn.add_v_proj"],
+            "norm_q": "attn.norm_q",
+            "norm_k": "attn.norm_k",
+            "norm_added_q": "attn.norm_added_q",
+            "norm_added_k": "attn.norm_added_k",
+            "out_proj": "attn.to_out.0",
+            "out_proj_context": "attn.to_add_out",
+            "mlp_fc1": "ff.linear_in",
+            "mlp_fc2": down_proj_local_name,
+            "mlp_context_fc1": "ff_context.linear_in",
+            "mlp_context_fc2": context_down_proj_local_name,
+        },
+        smooth_name_map={
+            "qkv_proj": "attn.to_q",
+            "qkv_proj_context": "attn.add_k_proj",
+            "out_proj": "attn.to_out.0",
+            "out_proj_context": "attn.to_out.0",
+            "mlp_fc1": "ff.linear_in",
+            "mlp_fc2": down_proj_local_name,
+            "mlp_context_fc1": "ff_context.linear_in",
+            "mlp_context_fc2": context_down_proj_local_name,
+        },
+        branch_name_map={
+            "qkv_proj": "attn.to_q",
+            "qkv_proj_context": "attn.add_k_proj",
+            "out_proj": "attn.to_out.0",
+            "out_proj_context": "attn.to_add_out",
+            "mlp_fc1": "ff.linear_in",
+            "mlp_fc2": down_proj_local_name,
+            "mlp_context_fc1": "ff_context.linear_in",
+            "mlp_context_fc2": context_down_proj_local_name,
+        },
+        convert_map={
+            "qkv_proj": "linear",
+            "qkv_proj_context": "linear",
+            "out_proj": "linear",
+            "out_proj_context": "linear",
+            "mlp_fc1": "linear",
+            "mlp_fc2": "linear",
+            "mlp_context_fc1": "linear",
+            "mlp_context_fc2": "linear",
         },
         float_point=float_point,
     )
@@ -350,6 +470,7 @@ def convert_to_nunchaku_flux_state_dicts(
     smooth_dict: dict[str, torch.Tensor],
     branch_dict: dict[str, torch.Tensor],
     float_point: bool = False,
+    flux2: bool = False,
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
     block_names: set[str] = set()
     other: dict[str, torch.Tensor] = {}
@@ -359,12 +480,17 @@ def convert_to_nunchaku_flux_state_dicts(
         else:
             other[param_name] = state_dict[param_name]
     block_names = sorted(block_names, key=lambda x: (x.split(".")[0], int(x.split(".")[-1])))
-    print(f"Converting {len(block_names)} transformer blocks...")
+    print(f"Converting {len(block_names)} transformer blocks (flux2={flux2})...")
     converted: dict[str, torch.Tensor] = {}
     for block_name in block_names:
-        convert_fn = convert_to_nunchaku_flux_single_transformer_block_state_dict
-        if block_name.startswith("transformer_blocks"):
-            convert_fn = convert_to_nunchaku_flux_transformer_block_state_dict
+        if flux2:
+            convert_fn = convert_to_nunchaku_flux2_single_transformer_block_state_dict
+            if block_name.startswith("transformer_blocks"):
+                convert_fn = convert_to_nunchaku_flux2_transformer_block_state_dict
+        else:
+            convert_fn = convert_to_nunchaku_flux_single_transformer_block_state_dict
+            if block_name.startswith("transformer_blocks"):
+                convert_fn = convert_to_nunchaku_flux_transformer_block_state_dict
         update_state_dict(
             converted,
             convert_fn(
@@ -386,6 +512,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-root", type=str, default="", help="root to the output checkpoint directory.")
     parser.add_argument("--model-name", type=str, default=None, help="name of the model.")
     parser.add_argument("--float-point", action="store_true", help="use float-point 4-bit quantization.")
+    parser.add_argument("--flux2", action="store_true", default=None, help="use Flux2 block layout (auto-detected if not specified).")
     args = parser.parse_args()
     if not args.output_root:
         args.output_root = args.quant_path
@@ -406,12 +533,19 @@ if __name__ == "__main__":
     scale_dict = torch.load(scale_dict_path, map_location="cpu")
     smooth_dict = torch.load(smooth_dict_path, map_location=map_location) if os.path.exists(smooth_dict_path) else {}
     branch_dict = torch.load(branch_dict_path, map_location=map_location) if os.path.exists(branch_dict_path) else {}
+    # Auto-detect Flux2 if not explicitly specified
+    flux2 = args.flux2
+    if flux2 is None:
+        flux2 = any(k.endswith(".attn.mlp_proj.weight") for k in state_dict.keys())
+        if flux2:
+            print("Auto-detected Flux2 model layout (found attn.mlp_proj keys).")
     converted_state_dict, other_state_dict = convert_to_nunchaku_flux_state_dicts(
         state_dict=state_dict,
         scale_dict=scale_dict,
         smooth_dict=smooth_dict,
         branch_dict=branch_dict,
         float_point=args.float_point,
+        flux2=flux2,
     )
     output_dirpath = os.path.join(args.output_root, model_name)
     os.makedirs(output_dirpath, exist_ok=True)
