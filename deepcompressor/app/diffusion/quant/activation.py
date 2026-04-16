@@ -12,12 +12,11 @@ from deepcompressor.data.cache import IOTensorsCache
 from deepcompressor.data.common import TensorType
 from deepcompressor.utils import tools
 
+from ..graph import iter_activation_group_specs
 from ..nn.struct import (
-    DiffusionAttentionStruct,
     DiffusionBlockStruct,
     DiffusionModelStruct,
     DiffusionModuleStruct,
-    DiffusionTransformerBlockStruct,
 )
 from .config import DiffusionQuantConfig
 from .quantizer import DiffusionActivationQuantizer
@@ -74,71 +73,22 @@ def quantize_diffusion_block_activations(  # noqa: C901
     ] = []
     In, Out = TensorType.Inputs, TensorType.Outputs  # noqa: F841
 
-    used_modules: set[nn.Module] = set()
-    for module_key, module_name, module, parent, field_name in layer.named_key_modules():
-        modules, orig_struct_wgts = None, {}
-        if field_name in ("k_proj", "v_proj", "add_q_proj", "add_v_proj"):
-            continue
-        if field_name in ("q_proj", "add_k_proj", "up_proj"):
-            grandparent = parent.parent
-            assert isinstance(grandparent, DiffusionTransformerBlockStruct)
-            if grandparent.parallel and parent.idx == 0:
-                if orig_state_dict:
-                    orig_struct_wgts = {
-                        proj_module: (proj_module.weight, orig_state_dict[f"{proj_name}.weight"])
-                        for _, proj_name, proj_module, _, _ in grandparent.named_key_modules()
-                    }
-                if field_name == "q_proj":
-                    assert isinstance(parent, DiffusionAttentionStruct)
-                    assert module_name == parent.q_proj_name
-                    modules, module_names = parent.qkv_proj, parent.qkv_proj_names
-                    if grandparent.ffn_struct is not None:
-                        modules.append(grandparent.ffn_struct.up_proj)
-                        module_names.append(grandparent.ffn_struct.up_proj_name)
-                elif field_name == "add_k_proj":
-                    assert isinstance(parent, DiffusionAttentionStruct)
-                    assert module_name == parent.add_k_proj_name
-                    modules, module_names = parent.add_qkv_proj, parent.add_qkv_proj_names
-                    if grandparent.add_ffn_struct is not None:
-                        modules.append(grandparent.add_ffn_struct.up_proj)
-                        module_names.append(grandparent.add_ffn_struct.up_proj_name)
-                else:
-                    assert field_name == "up_proj"
-                    if module in used_modules:
-                        continue
-                    assert module_name == grandparent.add_ffn_struct.up_proj_name
-                    assert grandparent.attn_structs[0].is_self_attn()
-                eval_module, eval_name, eval_kwargs = grandparent.module, grandparent.name, layer_kwargs
-            elif isinstance(parent, DiffusionAttentionStruct):
-                eval_module, eval_name = parent.module, parent.name
-                eval_kwargs = parent.filter_kwargs(layer_kwargs) if layer_kwargs else {}
-                if orig_state_dict:
-                    orig_struct_wgts = {
-                        proj_module: (proj_module.weight, orig_state_dict[f"{proj_name}.weight"])
-                        for _, proj_name, proj_module, _, _ in parent.named_key_modules()
-                    }
-                if field_name == "q_proj":
-                    assert module_name == parent.q_proj_name
-                    modules, module_names = parent.qkv_proj, parent.qkv_proj_names
-                else:
-                    assert field_name == "add_k_proj"
-                    assert module_name == parent.add_k_proj_name
-                    modules, module_names = parent.add_qkv_proj, parent.add_qkv_proj_names
-        if modules is None:
-            assert module not in used_modules
-            used_modules.add(module)
-            orig_wgts = [(module.weight, orig_state_dict[f"{module_name}.weight"])] if orig_state_dict else None
-            args_caches.append((module_key, In, [module], [module_name], module, module_name, None, orig_wgts))
-        else:
-            orig_wgts = []
-            for proj_module in modules:
-                assert proj_module not in used_modules
-                used_modules.add(proj_module)
-                if orig_state_dict:
-                    orig_wgts.append(orig_struct_wgts.pop(proj_module))
-            orig_wgts.extend(orig_struct_wgts.values())
-            orig_wgts = None if not orig_wgts else orig_wgts
-            args_caches.append((module_key, In, modules, module_names, eval_module, eval_name, eval_kwargs, orig_wgts))
+    for spec in iter_activation_group_specs(layer, layer_kwargs=layer_kwargs):
+        orig_wgts = None
+        if orig_state_dict:
+            orig_wgts = [(weight, orig_state_dict[f"{name}.weight"]) for weight, name in spec.orig_weight_refs]
+        args_caches.append(
+            (
+                spec.key,
+                In,
+                list(spec.modules),
+                list(spec.module_names),
+                spec.eval_module,
+                spec.eval_name,
+                spec.eval_kwargs,
+                orig_wgts,
+            )
+        )
     # endregion
     quantizers: dict[str, DiffusionActivationQuantizer] = {}
     tools.logging.Formatter.indent_inc()

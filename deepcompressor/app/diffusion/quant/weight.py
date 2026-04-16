@@ -13,10 +13,11 @@ from deepcompressor.data.zero import ZeroPointDomain
 from deepcompressor.nn.patch.lowrank import LowRankBranch
 from deepcompressor.utils import tools
 
-from ..nn.struct import DiffusionAttentionStruct, DiffusionBlockStruct, DiffusionModelStruct, DiffusionModuleStruct
+from ..graph import iter_low_rank_group_specs, resolve_eval_scope
+from ..nn.struct import DiffusionBlockStruct, DiffusionModelStruct, DiffusionModuleStruct
 from .config import DiffusionQuantConfig
 from .quantizer import DiffusionActivationQuantizer, DiffusionWeightQuantizer
-from .utils import get_needs_inputs_fn, wrap_joint_attn
+from .utils import get_needs_inputs_fn
 
 __all__ = ["quantize_diffusion_weights", "load_diffusion_weights_state_dict"]
 
@@ -48,45 +49,14 @@ def calibrate_diffusion_block_low_rank_branch(  # noqa: C901
     logger.debug("- Calibrating low-rank branches of block %s", layer.name)
     layer_cache = layer_cache or {}
     layer_kwargs = layer_kwargs or {}
-    for module_key, module_name, module, parent, field_name in layer.named_key_modules():
-        modules, module_names = [module], [module_name]
-        if not config.wgts.low_rank.exclusive:
-            if field_name.endswith(("q_proj", "k_proj", "v_proj")):
-                assert isinstance(parent, DiffusionAttentionStruct)
-                if parent.is_self_attn():
-                    if field_name == "q_proj":
-                        modules, module_names = parent.qkv_proj, parent.qkv_proj_names
-                    else:
-                        continue
-                elif parent.is_cross_attn():
-                    if field_name == "add_k_proj":
-                        modules.append(parent.add_v_proj)
-                        module_names.append(parent.add_v_proj_name)
-                    elif field_name != "q_proj":
-                        continue
-                else:
-                    assert parent.is_joint_attn()
-                    if field_name == "q_proj":
-                        modules, module_names = parent.qkv_proj, parent.qkv_proj_names
-                    elif field_name == "add_k_proj":
-                        modules, module_names = parent.add_qkv_proj, parent.add_qkv_proj_names
-                    else:
-                        continue
-        if field_name.endswith(("q_proj", "k_proj")):
-            assert isinstance(parent, DiffusionAttentionStruct)
-            if parent.parent.parallel and parent.idx == 0:
-                eval_module = parent.parent.module
-                eval_name = parent.parent.name
-                eval_kwargs = layer_kwargs
-            else:
-                eval_module = parent.module
-                eval_name = parent.name
-                eval_kwargs = parent.filter_kwargs(layer_kwargs)
-            if parent.is_joint_attn() and "add_" in field_name:
-                eval_module = wrap_joint_attn(eval_module, indexes=1)
-        else:
-            eval_module, eval_name, eval_kwargs = module, module_name, None
-        if isinstance(modules[0], nn.Linear):
+    for spec in iter_low_rank_group_specs(layer, layer_kwargs=layer_kwargs, exclusive=config.wgts.low_rank.exclusive):
+        modules = list(spec.modules)
+        module_names = list(spec.module_names)
+        module = modules[0]
+        module_name = module_names[0]
+        module_key = spec.key
+        eval_module, eval_name, eval_kwargs = spec.eval_module, spec.eval_name, spec.eval_kwargs
+        if isinstance(module, nn.Linear):
             assert all(isinstance(m, nn.Linear) for m in modules)
             channels_dim = -1
         else:
@@ -173,20 +143,13 @@ def update_diffusion_block_weight_quantizer_state_dict(
     logger.debug("- Calibrating weights: block %s", layer.name)
     tools.logging.Formatter.indent_inc()
     for module_key, module_name, module, parent, field_name in layer.named_key_modules():
-        if field_name.endswith(("q_proj", "k_proj")):
-            assert isinstance(parent, DiffusionAttentionStruct)
-            if parent.parent.parallel and parent.idx == 0:
-                eval_module = parent.parent.module
-                eval_name = parent.parent.name
-                eval_kwargs = layer_kwargs
-            else:
-                eval_module = parent.module
-                eval_name = parent.name
-                eval_kwargs = parent.filter_kwargs(layer_kwargs)
-            if parent.is_joint_attn() and "add_" in field_name:
-                eval_module = wrap_joint_attn(eval_module, indexes=1)
-        else:
-            eval_module, eval_name, eval_kwargs = module, module_name, None
+        eval_module, eval_name, eval_kwargs = resolve_eval_scope(
+            module=module,
+            module_name=module_name,
+            parent=parent,
+            field_name=field_name,
+            layer_kwargs=layer_kwargs,
+        )
         config_wgts = config.wgts
         if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
             config_wgts = config.extra_wgts
