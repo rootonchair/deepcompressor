@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+from __future__ import annotations
+
 import torch.nn as nn
 
 from ..nn.struct import DiffusionModelStruct
@@ -13,9 +15,16 @@ def get_default_key_map() -> dict[str, set[str]]:
     return DiffusionModelStruct._get_default_key_map()
 
 
+def ensure_model_adapter(model: nn.Module | DiffusionModelStruct | "StructModelAdapter") -> "StructModelAdapter":
+    return model if isinstance(model, StructModelAdapter) else StructModelAdapter(model)
+
+
 class StructModelAdapter(DiffusionModelAdapter):
     def __init__(self, model: nn.Module | DiffusionModelStruct) -> None:
         self.struct = model if isinstance(model, DiffusionModelStruct) else DiffusionModelStruct.construct(model)
+
+    def get_root_module(self) -> nn.Module:
+        return self.struct.module
 
     def iter_nodes(self):
         for key, name, module, parent, field_name in self.struct.named_key_modules():
@@ -31,6 +40,7 @@ class StructModelAdapter(DiffusionModelAdapter):
                 key=key,
                 name=name,
                 module=module,
+                parent=parent,
                 parent_name=parent.name,
                 field_name=field_name,
                 kind=kind,
@@ -66,3 +76,6 @@ class StructModelAdapter(DiffusionModelAdapter):
 
     def get_key_map(self) -> dict[str, set[str]]:
         return type(self.struct)._get_default_key_map()
+
+    def iter_transformer_block_structs(self):
+        return self.struct.iter_transformer_block_structs()

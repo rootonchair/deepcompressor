@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 
-from typing import Iterable, Protocol
+from typing import Any, Iterable, Protocol
+
+import torch.nn as nn
 
 from .types import ActivationPlan, QuantGroup, QuantNode
 
 
 class DiffusionModelAdapter(Protocol):
+    def get_root_module(self) -> nn.Module: ...
+
     def iter_nodes(self) -> Iterable[QuantNode]: ...
 
     def iter_groups(self) -> Iterable[QuantGroup]: ...
@@ -17,3 +21,5 @@ class DiffusionModelAdapter(Protocol):
     def get_post_keys(self) -> tuple[str, ...]: ...
 
     def get_key_map(self) -> dict[str, set[str]]: ...
+
+    def iter_transformer_block_structs(self) -> Iterable[Any]: ...

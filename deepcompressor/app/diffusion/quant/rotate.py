@@ -13,6 +13,7 @@ from deepcompressor.calib.rotate import (
 )
 from deepcompressor.utils import tools
 
+from ..graph import StructModelAdapter, ensure_model_adapter
 from ..nn.struct import DiffusionModelStruct
 from .config import DiffusionQuantConfig
 
@@ -21,7 +22,7 @@ __all__ = ["rotate_diffusion"]
 
 @torch.inference_mode()
 def rotate_diffusion(  # noqa: C901
-    model: DiffusionModelStruct, /, config: DiffusionQuantConfig
+    model: torch.nn.Module | DiffusionModelStruct | StructModelAdapter, /, config: DiffusionQuantConfig
 ):
     """Rotate the weights of the diffusion model.
 
@@ -31,14 +32,12 @@ def rotate_diffusion(  # noqa: C901
         config (`QuantRotationConfig`):
             Rotation configuration.
     """
-    if not isinstance(model, DiffusionModelStruct):
-        model = DiffusionModelStruct.construct(model)
-    assert isinstance(model, DiffusionModelStruct)
+    adapter = ensure_model_adapter(model)
     devices: dict[str, torch.device] = {}
     dtypes: dict[str, torch.dtype] = {}
     linears: dict[str, torch.nn.Linear] = {}
     size: float = 0
-    for n, m in model.module.named_modules():
+    for n, m in adapter.get_root_module().named_modules():
         if isinstance(m, torch.nn.Linear):
             devices[n] = m.weight.device
             dtypes[n] = m.weight.dtype
@@ -49,7 +48,7 @@ def rotate_diffusion(  # noqa: C901
 
     logger = tools.logging.getLogger(f"{__name__}.Rotate")
     head_rotation = None
-    for transformer_block in model.iter_transformer_block_structs():
+    for transformer_block in adapter.iter_transformer_block_structs():
         logger.debug(f"- Rotating {transformer_block.name}")
         tools.logging.Formatter.indent_inc()
         for attn in transformer_block.iter_attention_structs():

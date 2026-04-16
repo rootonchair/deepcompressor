@@ -14,6 +14,7 @@ class QuantNode:
     key: str
     name: str
     module: nn.Module
+    parent: object
     parent_name: str
     field_name: str
     kind: NodeKind

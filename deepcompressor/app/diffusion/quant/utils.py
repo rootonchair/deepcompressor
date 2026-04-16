@@ -3,6 +3,7 @@ import typing as tp
 import torch
 import torch.nn as nn
 
+from ..graph import StructModelAdapter, ensure_model_adapter
 from ..nn.struct import DiffusionAttentionStruct, DiffusionFeedForwardStruct, DiffusionModelStruct
 from .config import DiffusionQuantConfig
 
@@ -26,12 +27,12 @@ def wrap_joint_attn(attn: nn.Module, /, *, indexes: int | tuple[int, ...] = 1) -
 
 
 def get_needs_inputs_fn(
-    model: DiffusionModelStruct, config: DiffusionQuantConfig
+    model: nn.Module | DiffusionModelStruct | StructModelAdapter, config: DiffusionQuantConfig
 ) -> tp.Callable[[str, nn.Module], bool]:
     """Get function that checks whether the module needs to cache inputs.
 
     Args:
-        model (`DiffusionModelStruct`):
+        model (`nn.Module` or `DiffusionModelStruct` or `StructModelAdapter`):
             The diffused model.
         config (`DiffusionQuantConfig`):
             The quantization configuration.
@@ -40,9 +41,13 @@ def get_needs_inputs_fn(
         `Callable[[str, nn.Module], bool]`:
             The function that checks whether the module needs to cache inputs.
     """
-
+    adapter = ensure_model_adapter(model)
     needs_inputs_names = set()
-    for module_key, module_name, _, parent, field_name in model.named_key_modules():
+    for node in adapter.iter_nodes():
+        module_key = node.key
+        module_name = node.name
+        parent = node.parent
+        field_name = node.field_name
         if (config.enabled_wgts and config.wgts.is_enabled_for(module_key)) or (
             config.enabled_ipts and config.ipts.is_enabled_for(module_key)
         ):
@@ -80,12 +85,12 @@ def get_needs_inputs_fn(
 
 
 def get_needs_outputs_fn(
-    model: DiffusionModelStruct, config: DiffusionQuantConfig
+    model: nn.Module | DiffusionModelStruct | StructModelAdapter, config: DiffusionQuantConfig
 ) -> tp.Callable[[str, nn.Module], bool]:
     """Get function that checks whether the module needs to cache outputs.
 
     Args:
-        model (`DiffusionModelStruct`):
+        model (`nn.Module` or `DiffusionModelStruct` or `StructModelAdapter`):
             The diffused model.
         config (`DiffusionQuantConfig`):
             The quantization configuration.
