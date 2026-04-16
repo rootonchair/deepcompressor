@@ -15,7 +15,7 @@ from deepcompressor.utils.config.output import OutputConfig
 
 from .cache import DiffusionPtqCacheConfig, DiffusionQuantCacheConfig
 from .eval import DiffusionEvalConfig
-from .nn.struct import DiffusionModelStruct
+from .graph import get_default_key_map
 from .pipeline import DiffusionPipelineConfig
 from .quant import DiffusionQuantConfig
 
@@ -191,6 +191,6 @@ class DiffusionPtqRunConfig:
                 A parser for post-training quantization of a diffusion model.
         """
         parser = ConfigParser("Diffusion Run configuration")
-        DiffusionQuantConfig.set_key_map(DiffusionModelStruct._get_default_key_map())
+        DiffusionQuantConfig.set_key_map(get_default_key_map())
         parser.add_config(cls)
         return parser

@@ -1,0 +1,19 @@
+# -*- coding: utf-8 -*-
+
+from typing import Iterable, Protocol
+
+from .types import ActivationPlan, QuantGroup, QuantNode
+
+
+class DiffusionModelAdapter(Protocol):
+    def iter_nodes(self) -> Iterable[QuantNode]: ...
+
+    def iter_groups(self) -> Iterable[QuantGroup]: ...
+
+    def get_activation_plan(self, *, skip_pre_modules: bool, skip_post_modules: bool) -> ActivationPlan: ...
+
+    def get_prev_keys(self) -> tuple[str, ...]: ...
+
+    def get_post_keys(self) -> tuple[str, ...]: ...
+
+    def get_key_map(self) -> dict[str, set[str]]: ...
