@@ -322,9 +322,7 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
                         - layer input arguments
         """
         adapter = ensure_model_adapter(model)
-        model_struct = adapter.struct
         model = adapter.get_root_module()
-        assert isinstance(model_struct, DiffusionModelStruct)
         assert isinstance(model, nn.Module)
         action = DiffusionConcatCacheAction("cpu") if action is None else action
         activation_plan = adapter.get_activation_plan(
@@ -357,7 +355,6 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
             layer_kwargs.pop("temb", None)
             layer_kwargs.pop("temb_mod", None)
             layer_struct = layer_structs[layer_idx]
-            assert layer_struct is not None
             if isinstance(layer_struct, DiffusionBlockStruct):
                 assert layer_struct.name == layer_name
                 assert layer is layer_struct.module
@@ -386,4 +383,4 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
                                 cache = layer_cache[ffn_struct.down_proj_names[expert_idx]]
                                 for down_proj_name in ffn_struct.down_proj_names[expert_idx::num_experts]:
                                     layer_cache[down_proj_name] = cache
-            yield layer_name, (layer_struct, layer_cache, layer_kwargs)
+            yield layer_name, (layer_struct or layer, layer_cache, layer_kwargs)

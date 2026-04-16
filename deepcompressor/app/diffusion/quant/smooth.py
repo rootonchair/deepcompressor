@@ -622,7 +622,6 @@ def smooth_diffusion(
             The smoothing scales cache.
     """
     adapter = ensure_model_adapter(model)
-    model = adapter.struct
     smooth_cache = smooth_cache or {}
     if config.smooth.enabled_proj:
         if smooth_cache:
@@ -635,8 +634,8 @@ def smooth_diffusion(
         with tools.logging.redirect_tqdm():
             for _, (layer, layer_cache, layer_kwargs) in tqdm(
                 config.calib.build_loader().iter_layer_activations(
-                    model,
-                    needs_inputs_fn=get_needs_inputs_fn(model, config),
+                    adapter,
+                    needs_inputs_fn=get_needs_inputs_fn(adapter, config),
                     skip_pre_modules=True,
                     skip_post_modules=True,
                 ),

@@ -164,7 +164,6 @@ def quantize_diffusion_activations(
     """
     logger = tools.logging.getLogger(f"{__name__}.ActivationQuant")
     adapter = ensure_model_adapter(model)
-    model = adapter.struct
     quantizer_state_dict = quantizer_state_dict or {}
     quantizers: dict[str, DiffusionActivationQuantizer] = {}
     skip_pre_modules = all(key in config.ipts.skips for key in adapter.get_prev_keys())
@@ -176,9 +175,9 @@ def quantize_diffusion_activations(
         with tools.logging.redirect_tqdm():
             for _, (layer, layer_cache, layer_kwargs) in tqdm(
                 config.calib.build_loader().iter_layer_activations(
-                    model,
-                    needs_inputs_fn=get_needs_inputs_fn(model, config=config),
-                    needs_outputs_fn=get_needs_outputs_fn(model, config=config),
+                    adapter,
+                    needs_inputs_fn=get_needs_inputs_fn(adapter, config=config),
+                    needs_outputs_fn=get_needs_outputs_fn(adapter, config=config),
                     skip_pre_modules=skip_pre_modules,
                     skip_post_modules=skip_post_modules,
                 ),
@@ -207,7 +206,9 @@ def quantize_diffusion_activations(
                 orig_state_dict=orig_state_dict,
             )
             quantizers.update(block_quantizers)
-    for _, module_name, module, _, _ in model.named_key_modules():
+    for node in adapter.iter_nodes():
+        module_name = node.name
+        module = node.module
         ipts_quantizer = quantizers.get(f"{module_name}.input", None)
         opts_quantizer = quantizers.get(f"{module_name}.output", None)
         needs_quant_ipts = ipts_quantizer is not None and ipts_quantizer.is_enabled()

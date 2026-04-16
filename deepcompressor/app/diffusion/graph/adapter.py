@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Protocol, runtime_checkable
 
 import torch.nn as nn
 
 from .types import ActivationPlan, QuantGroup, QuantNode
 
 
+@runtime_checkable
 class DiffusionModelAdapter(Protocol):
     def get_root_module(self) -> nn.Module: ...
 

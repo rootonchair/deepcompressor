@@ -6,17 +6,23 @@ import torch.nn as nn
 
 from ..nn.struct import DiffusionModelStruct
 from .adapter import DiffusionModelAdapter
+from .registry import resolve_model_adapter
 from .types import ActivationLayer, ActivationPlan, QuantGroup, QuantNode
 
-__all__ = ["StructModelAdapter", "get_default_key_map"]
+__all__ = ["StructModelAdapter", "ensure_model_adapter", "get_default_key_map"]
 
 
 def get_default_key_map() -> dict[str, set[str]]:
     return DiffusionModelStruct._get_default_key_map()
 
 
-def ensure_model_adapter(model: nn.Module | DiffusionModelStruct | "StructModelAdapter") -> "StructModelAdapter":
-    return model if isinstance(model, StructModelAdapter) else StructModelAdapter(model)
+def ensure_model_adapter(model: nn.Module | DiffusionModelStruct | DiffusionModelAdapter) -> DiffusionModelAdapter:
+    if isinstance(model, DiffusionModelAdapter):
+        return model
+    if isinstance(model, DiffusionModelStruct):
+        return StructModelAdapter(model)
+    adapter = resolve_model_adapter(model)
+    return adapter if adapter is not None else StructModelAdapter(model)
 
 
 class StructModelAdapter(DiffusionModelAdapter):

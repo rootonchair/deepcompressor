@@ -291,7 +291,7 @@ def quantize_diffusion_weights(
     """
     logger = tools.logging.getLogger(f"{__name__}.WeightQuant")
     adapter = ensure_model_adapter(model)
-    model = adapter.struct
+    model = adapter.get_root_module()
     quantizer_state_dict = quantizer_state_dict or {}
     branch_state_dict = branch_state_dict or {}
 
@@ -313,8 +313,8 @@ def quantize_diffusion_weights(
                 block_plan = adapter.get_activation_plan(skip_pre_modules=True, skip_post_modules=True)
                 for _, (layer, layer_cache, layer_kwargs) in tqdm(
                     config.calib.build_loader().iter_layer_activations(
-                        model,
-                        needs_inputs_fn=get_needs_inputs_fn(model, config),
+                        adapter,
+                        needs_inputs_fn=get_needs_inputs_fn(adapter, config),
                         skip_pre_modules=True,
                         skip_post_modules=True,
                     ),
@@ -341,8 +341,8 @@ def quantize_diffusion_weights(
         if not quantizer_state_dict:
             if config.wgts.needs_calib_data:
                 iterable = config.calib.build_loader().iter_layer_activations(
-                    model,
-                    needs_inputs_fn=get_needs_inputs_fn(model, config),
+                    adapter,
+                    needs_inputs_fn=get_needs_inputs_fn(adapter, config),
                     skip_pre_modules=skip_pre_modules,
                     skip_post_modules=skip_post_modules,
                 )
@@ -370,8 +370,8 @@ def quantize_diffusion_weights(
     scale_state_dict: dict[str, torch.Tensor | float | None] = {}
     if config.wgts.enabled_gptq:
         iterable = config.calib.build_loader().iter_layer_activations(
-            model,
-            needs_inputs_fn=get_needs_inputs_fn(model, config),
+            adapter,
+            needs_inputs_fn=get_needs_inputs_fn(adapter, config),
             skip_pre_modules=skip_pre_modules,
             skip_post_modules=skip_post_modules,
         )
@@ -418,7 +418,6 @@ def load_diffusion_weights_state_dict(
             The state dict of the low-rank branches.
     """
     adapter = ensure_model_adapter(model)
-    model = adapter.struct
     if config.enabled_wgts and config.wgts.enabled_low_rank:
         assert branch_state_dict is not None
         for _, layer in tqdm(
@@ -428,6 +427,6 @@ def load_diffusion_weights_state_dict(
             dynamic_ncols=True,
         ):
             calibrate_diffusion_block_low_rank_branch(layer=layer, config=config, branch_state_dict=branch_state_dict)
-    model.module.load_state_dict(state_dict)
+    adapter.get_root_module().load_state_dict(state_dict)
     gc.collect()
     torch.cuda.empty_cache()
