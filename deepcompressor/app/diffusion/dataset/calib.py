@@ -33,6 +33,7 @@ from deepcompressor.dataset.action import CacheAction, ConcatCacheAction
 from deepcompressor.dataset.cache import BaseCalibCacheLoader
 from deepcompressor.dataset.config import BaseDataLoaderConfig
 
+from ..graph import ensure_model_adapter
 from ..nn.struct import DiffusionBlockStruct, DiffusionModelStruct
 from .base import DiffusionDataset
 
@@ -320,19 +321,20 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
                         - inputs and outputs cache of each module in the layer
                         - layer input arguments
         """
-        if not isinstance(model, DiffusionModelStruct):
-            model_struct = DiffusionModelStruct.construct(model)
-        else:
-            model_struct = model
-            model = model_struct.module
+        adapter = ensure_model_adapter(model)
+        model_struct = adapter.struct
+        model = adapter.get_root_module()
         assert isinstance(model_struct, DiffusionModelStruct)
         assert isinstance(model, nn.Module)
         action = DiffusionConcatCacheAction("cpu") if action is None else action
-        layers, layer_structs, recomputes, use_prev_layer_outputs = model_struct.get_iter_layer_activations_args(
+        activation_plan = adapter.get_activation_plan(
             skip_pre_modules=skip_pre_modules,
             skip_post_modules=skip_post_modules,
-            **self.dataset[0]["input_kwargs"],
         )
+        layers = [entry.module for entry in activation_plan.layers]
+        layer_structs = [entry.ref for entry in activation_plan.layers]
+        recomputes = [entry.needs_recompute for entry in activation_plan.layers]
+        use_prev_layer_outputs = [entry.use_prev_layer_outputs for entry in activation_plan.layers]
         for layer_idx, (layer_name, (layer, layer_cache, layer_inputs)) in enumerate(
             self._iter_layer_activations(
                 model,
@@ -355,6 +357,7 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
             layer_kwargs.pop("temb", None)
             layer_kwargs.pop("temb_mod", None)
             layer_struct = layer_structs[layer_idx]
+            assert layer_struct is not None
             if isinstance(layer_struct, DiffusionBlockStruct):
                 assert layer_struct.name == layer_name
                 assert layer is layer_struct.module

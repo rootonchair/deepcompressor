@@ -12,7 +12,7 @@ from deepcompressor.data.cache import IOTensorsCache
 from deepcompressor.data.common import TensorType
 from deepcompressor.utils import tools
 
-from ..graph import iter_activation_group_specs
+from ..graph import ensure_model_adapter, iter_activation_group_specs
 from ..nn.struct import (
     DiffusionBlockStruct,
     DiffusionModelStruct,
@@ -163,14 +163,16 @@ def quantize_diffusion_activations(
             The activation quantizers state dict cache.
     """
     logger = tools.logging.getLogger(f"{__name__}.ActivationQuant")
-    if not isinstance(model, DiffusionModelStruct):
-        model = DiffusionModelStruct.construct(model)
-    assert isinstance(model, DiffusionModelStruct)
+    adapter = ensure_model_adapter(model)
+    model = adapter.struct
     quantizer_state_dict = quantizer_state_dict or {}
     quantizers: dict[str, DiffusionActivationQuantizer] = {}
-    skip_pre_modules = all(key in config.ipts.skips for key in model.get_prev_module_keys())
-    skip_post_modules = all(key in config.ipts.skips for key in model.get_post_module_keys())
+    skip_pre_modules = all(key in config.ipts.skips for key in adapter.get_prev_keys())
+    skip_post_modules = all(key in config.ipts.skips for key in adapter.get_post_keys())
     if not quantizer_state_dict and config.needs_acts_quantizer_cache:
+        activation_plan = adapter.get_activation_plan(
+            skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules
+        )
         with tools.logging.redirect_tqdm():
             for _, (layer, layer_cache, layer_kwargs) in tqdm(
                 config.calib.build_loader().iter_layer_activations(
@@ -182,7 +184,7 @@ def quantize_diffusion_activations(
                 ),
                 desc="quantizing activations",
                 leave=False,
-                total=model.num_blocks + int(not skip_post_modules) + int(not skip_pre_modules) * 3,
+                total=len(activation_plan.layers),
                 dynamic_ncols=True,
             ):
                 block_quantizers = quantize_diffusion_block_activations(
@@ -195,7 +197,7 @@ def quantize_diffusion_activations(
                 )
                 quantizers.update(block_quantizers)
     else:
-        for _, layer in model.get_named_layers(
+        for _, layer in adapter.get_named_layers(
             skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules
         ).items():
             block_quantizers = quantize_diffusion_block_activations(

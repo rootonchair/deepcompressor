@@ -61,12 +61,20 @@ class StructModelAdapter(DiffusionModelAdapter):
                 module=layer,
                 needs_recompute=recompute,
                 use_prev_layer_outputs=use_prev_layer_outputs,
+                ref=layer_struct,
             )
             for layer, layer_struct, recompute, use_prev_layer_outputs in zip(
                 layers, structs, recomputes, uses, strict=True
             )
         )
         return ActivationPlan(layers=entries, layer_names=tuple(entry.name for entry in entries))
+
+    def get_named_layers(
+        self, *, skip_pre_modules: bool, skip_post_modules: bool, skip_blocks: bool = False
+    ) -> dict[str, object]:
+        return self.struct.get_named_layers(
+            skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules, skip_blocks=skip_blocks
+        )
 
     def get_prev_keys(self) -> tuple[str, ...]:
         return self.struct.get_prev_module_keys()

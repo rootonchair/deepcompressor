@@ -13,7 +13,7 @@ from deepcompressor.data.zero import ZeroPointDomain
 from deepcompressor.nn.patch.lowrank import LowRankBranch
 from deepcompressor.utils import tools
 
-from ..graph import iter_low_rank_group_specs, resolve_eval_scope
+from ..graph import ensure_model_adapter, iter_low_rank_group_specs, resolve_eval_scope
 from ..nn.struct import DiffusionBlockStruct, DiffusionModelStruct, DiffusionModuleStruct
 from .config import DiffusionQuantConfig
 from .quantizer import DiffusionActivationQuantizer, DiffusionWeightQuantizer
@@ -290,9 +290,8 @@ def quantize_diffusion_weights(
             The state dict of the weight quantizers, the state dict of the low-rank branches, and the scale state dict.
     """
     logger = tools.logging.getLogger(f"{__name__}.WeightQuant")
-    if not isinstance(model, DiffusionModelStruct):
-        model = DiffusionModelStruct.construct(model)
-    assert isinstance(model, DiffusionModelStruct)
+    adapter = ensure_model_adapter(model)
+    model = adapter.struct
     quantizer_state_dict = quantizer_state_dict or {}
     branch_state_dict = branch_state_dict or {}
 
@@ -302,7 +301,7 @@ def quantize_diffusion_weights(
         with tools.logging.redirect_tqdm():
             if branch_state_dict:
                 for _, layer in tqdm(
-                    model.get_named_layers(skip_pre_modules=True, skip_post_modules=True).items(),
+                    adapter.get_named_layers(skip_pre_modules=True, skip_post_modules=True).items(),
                     desc="adding low-rank branches",
                     leave=False,
                     dynamic_ncols=True,
@@ -311,6 +310,7 @@ def quantize_diffusion_weights(
                         layer=layer, config=config, branch_state_dict=branch_state_dict
                     )
             else:
+                block_plan = adapter.get_activation_plan(skip_pre_modules=True, skip_post_modules=True)
                 for _, (layer, layer_cache, layer_kwargs) in tqdm(
                     config.calib.build_loader().iter_layer_activations(
                         model,
@@ -320,7 +320,7 @@ def quantize_diffusion_weights(
                     ),
                     desc="calibrating low-rank branches",
                     leave=False,
-                    total=model.num_blocks,
+                    total=len(block_plan.layers),
                     dynamic_ncols=True,
                 ):
                     calibrate_diffusion_block_low_rank_branch(
@@ -332,8 +332,11 @@ def quantize_diffusion_weights(
                     )
         tools.logging.Formatter.indent_dec()
 
-    skip_pre_modules = all(key in config.wgts.skips for key in model.get_prev_module_keys())
-    skip_post_modules = all(key in config.wgts.skips for key in model.get_post_module_keys())
+    skip_pre_modules = all(key in config.wgts.skips for key in adapter.get_prev_keys())
+    skip_post_modules = all(key in config.wgts.skips for key in adapter.get_post_keys())
+    activation_plan = adapter.get_activation_plan(
+        skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules
+    )
     with tools.logging.redirect_tqdm():
         if not quantizer_state_dict:
             if config.wgts.needs_calib_data:
@@ -346,7 +349,7 @@ def quantize_diffusion_weights(
             else:
                 iterable = map(  # noqa: C417
                     lambda kv: (kv[0], (kv[1], {}, {})),
-                    model.get_named_layers(
+                    adapter.get_named_layers(
                         skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules
                     ).items(),
                 )
@@ -354,7 +357,7 @@ def quantize_diffusion_weights(
                 iterable,
                 desc="calibrating weight quantizers",
                 leave=False,
-                total=model.num_blocks + int(not skip_post_modules) + int(not skip_pre_modules) * 3,
+                total=len(activation_plan.layers),
                 dynamic_ncols=True,
             ):
                 update_diffusion_block_weight_quantizer_state_dict(
@@ -375,13 +378,13 @@ def quantize_diffusion_weights(
     else:
         iterable = map(  # noqa: C417
             lambda kv: (kv[0], (kv[1], {}, {})),
-            model.get_named_layers(skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules).items(),
+            adapter.get_named_layers(skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules).items(),
         )
     for _, (layer, layer_cache, _) in tqdm(
         iterable,
         desc="quantizing weights",
         leave=False,
-        total=model.num_blocks + int(not skip_post_modules) + int(not skip_pre_modules) * 3,
+        total=len(activation_plan.layers),
         dynamic_ncols=True,
     ):
         layer_scale_state_dict = quantize_diffusion_block_weights(
@@ -414,13 +417,12 @@ def load_diffusion_weights_state_dict(
         branch_state_dict (`dict[str, dict[str, torch.Tensor]]`):
             The state dict of the low-rank branches.
     """
-    if not isinstance(model, DiffusionModelStruct):
-        model = DiffusionModelStruct.construct(model)
-    assert isinstance(model, DiffusionModelStruct)
+    adapter = ensure_model_adapter(model)
+    model = adapter.struct
     if config.enabled_wgts and config.wgts.enabled_low_rank:
         assert branch_state_dict is not None
         for _, layer in tqdm(
-            model.get_named_layers(skip_pre_modules=True, skip_post_modules=True).items(),
+            adapter.get_named_layers(skip_pre_modules=True, skip_post_modules=True).items(),
             desc="adding low-rank branches",
             leave=False,
             dynamic_ncols=True,

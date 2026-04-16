@@ -7,14 +7,13 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
-from diffusers.models.transformers.transformer_flux2 import Flux2SingleTransformerBlock
-
 from deepcompressor.calib.smooth import ActivationSmoother, smooth_linear_modules
 from deepcompressor.data.cache import IOTensorsCache
 from deepcompressor.quantizer import Quantizer
 from deepcompressor.utils import tools
 from deepcompressor.utils.hooks import KeyedInputPackager
 
+from ..graph import ensure_model_adapter
 from ..nn.struct import (
     DiffusionAttentionStruct,
     DiffusionBlockStruct,
@@ -45,7 +44,7 @@ def smooth_diffusion_attention(
 
 
 @torch.inference_mode()
-def smooth_diffusion_qkv_proj(
+def smooth_diffusion_qkv_proj(  # noqa: C901
     attn: DiffusionAttentionStruct,
     config: DiffusionQuantConfig,
     smooth_cache: dict[str, torch.Tensor],
@@ -622,9 +621,8 @@ def smooth_diffusion(
         `dict[str, torch.Tensor]`:
             The smoothing scales cache.
     """
-    if not isinstance(model, DiffusionModelStruct):
-        model = DiffusionModelStruct.construct(model)
-    assert isinstance(model, DiffusionModelStruct)
+    adapter = ensure_model_adapter(model)
+    model = adapter.struct
     smooth_cache = smooth_cache or {}
     if config.smooth.enabled_proj:
         if smooth_cache:
@@ -633,6 +631,7 @@ def smooth_diffusion(
         if smooth_cache:
             assert smooth_cache.get("attn.fuse_when_possible", True) == config.smooth.attn.fuse_when_possible
     if not smooth_cache:
+        activation_plan = adapter.get_activation_plan(skip_pre_modules=True, skip_post_modules=True)
         with tools.logging.redirect_tqdm():
             for _, (layer, layer_cache, layer_kwargs) in tqdm(
                 config.calib.build_loader().iter_layer_activations(
@@ -643,7 +642,7 @@ def smooth_diffusion(
                 ),
                 desc="smoothing",
                 leave=False,
-                total=model.num_blocks,
+                total=len(activation_plan.layers),
                 dynamic_ncols=True,
             ):
                 smooth_diffusion_layer(
@@ -654,7 +653,7 @@ def smooth_diffusion(
                     layer_kwargs=layer_kwargs,
                 )
     else:
-        for layer in model.block_structs:
+        for layer in adapter.get_named_layers(skip_pre_modules=True, skip_post_modules=True).values():
             smooth_diffusion_layer(layer=layer, config=config, smooth_cache=smooth_cache)
     if config.smooth.enabled_proj:
         smooth_cache.setdefault("proj.fuse_when_possible", config.smooth.proj.fuse_when_possible)

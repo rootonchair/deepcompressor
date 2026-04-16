@@ -38,6 +38,7 @@ class ActivationLayer:
     module: nn.Module
     needs_recompute: bool
     use_prev_layer_outputs: bool
+    ref: object | None = None
 
 
 @dataclass(frozen=True)
