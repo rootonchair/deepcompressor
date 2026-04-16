@@ -9,6 +9,9 @@ Diffusion models have been proven highly effective at generating high-quality im
 
 ## Usage
 
+For maintainers extending diffusion model support, see the adapter refactor notes in
+[`graph-adapter-refactor.md`](graph-adapter-refactor.md).
+
 We use Flux.1-schnell as an example.
 
 ### Step 1: Evaluation Baselines Preparation
@@ -148,4 +151,3 @@ If you find `deepcompressor` useful or relevant to your research, please kindly 
   year={2025}
 }
 ```
-
